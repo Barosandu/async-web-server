@@ -76,7 +76,7 @@ void connection_start_async_io(struct connection *conn)
 	int ret = io_setup(10, &conn->ctx);
 	int error = io_submit(conn->ctx, 10, conn->piocb);
 
-	if(error == -1)
+	if (error == -1)
 		perror("aio_read");
 
 }
@@ -119,7 +119,7 @@ void receive_data(struct connection *conn)
 	 */
 	int bytes = 0;
 	int old_bytes = 0;
-	char * old_buffer = malloc(BUFSIZ * sizeof(char));
+	char *old_buffer = malloc(BUFSIZ * sizeof(char));
 	old_buffer[0] = 0;
 	int i = 0;
 	do {
@@ -127,18 +127,15 @@ void receive_data(struct connection *conn)
 		bytes = recv(conn->sockfd, conn->recv_buffer + old_bytes, BUFSIZ - old_bytes, 0);
 		// printf("RECV_BUFFER: %s\n", conn->recv_buffer);
 		old_bytes += bytes;
-		i ++;
-	} while(strlen(old_buffer) != strlen(conn->recv_buffer));
-	// printf("received buffer\n");
-//	tcp_close_connection(conn->sockfd);
+		i++;
+	} while (strlen(old_buffer) != strlen(conn->recv_buffer));
+
 	free(old_buffer);
 	parse_header(conn);
-//	 printf("rpath: %s\n",conn->request_path);
-
 	conn->recv_len = old_bytes;
 }
 
-int connection_send_data_custom(struct connection *conn, char * custom)
+int connection_send_data_custom(struct connection *conn, char *custom)
 {
 	/* May be used as a helper function. */
 	/* TODO: Send as much data as possible from the connection send buffer.
@@ -149,7 +146,7 @@ int connection_send_data_custom(struct connection *conn, char * custom)
 	do {
 		bytes = send(conn->sockfd, custom + old_bytes, strlen(custom) - old_bytes, 0);
 		old_bytes += bytes;
-	} while(bytes > 0);
+	} while (bytes > 0);
 }
 
 
@@ -170,7 +167,7 @@ int connection_open_file(struct connection *conn)
 	strcat(path, conn->request_path);
 
 	int file_descriptor = open(path, O_RDWR, S_IRUSR | S_IWUSR);
-	if(file_descriptor == -1) {
+	if (file_descriptor == -1) {
 		connection_prepare_send_404(conn);
 		return -1;
 	}
@@ -200,6 +197,25 @@ int connection_send_data(struct connection *conn)
 	return connection_send_data_custom(conn, conn->send_buffer);
 }
 
+int send_file_dyn(struct connection *conn, int * offset)
+{
+	io_setup(1, &conn->ctx);
+	int len = BUFSIZ > (conn->file_size - *offset) ? (conn->file_size - *offset) : BUFSIZ;
+	char *custom = calloc(len , sizeof(char));
+	memset(&conn->iocb, 0, sizeof(struct iocb));
+	io_prep_pread(&conn->iocb, conn->fd, custom, len, *offset);
+	conn->piocb[0] = &conn->iocb;
+	io_submit(conn->ctx, 1, conn->piocb);
+
+	struct io_event event;
+	io_getevents(conn->ctx, 1, 1, &event, NULL);
+	int bytes_send = send(conn->sockfd, custom, len, 0);
+	(*offset) += bytes_send;
+
+	free(custom);
+	return 0;
+}
+
 int parse_header(struct connection *conn)
 {
 	/* TODO: Parse the HTTP header and extract the file path. */
@@ -220,15 +236,33 @@ int parse_header(struct connection *conn)
 
 	int number_of_bytes = http_parser_execute(&(conn->request_parser), &settings_on_path, conn->recv_buffer, BUFSIZ);
 	int fd = connection_open_file(conn);
-	if(fd != -1) {
+	if (fd != -1) {
 		conn->fd = fd;
-		char header[100] = "HTTP/1.0 200 OK\r\n\r\n";
-		connection_send_data_custom(conn, header);
-		off_t offset = 0;
-		off_t oth_offset = 0;
-		while (offset < conn->file_size) {
-			int err = sendfile(conn->sockfd, conn->fd, &offset, conn->file_size);
-			oth_offset = offset;
+
+		if (strstr(conn->request_path, "static") != NULL) {
+			char header[100] = "HTTP/1.0 200 OK\r\n\r\n";
+			connection_send_data_custom(conn, header);
+			off_t offset = 0;
+			off_t oth_offset = 0;
+			while (offset < conn->file_size) {
+				int err = sendfile(conn->sockfd, conn->fd, &offset, conn->file_size);
+				oth_offset = offset;
+			}
+
+			close(conn->fd);
+		} else {
+			printf("probing fhjhhjghfj dyn %zu,\n", conn->file_size);
+
+			int offs = 0;
+			while (offs < conn->file_size) {
+				int err = send_file_dyn(conn, &offs);
+//				int err = sendfile(conn->sockfd, conn->fd, &offs, conn->file_size);
+			}
+
+			close(conn->fd);
+
+			printf("broke\n");
+
 		}
 	}
 
@@ -237,16 +271,13 @@ int parse_header(struct connection *conn)
 	return 0;
 }
 
-int send_file_dyn(struct connection * conn) {
 
-}
 
 enum connection_state connection_send_static(struct connection *conn)
 {
 	/* TODO: Send static data using sendfile(2). */
 	return STATE_NO_STATE;
 }
-
 
 
 int connection_send_dynamic(struct connection *conn)
@@ -266,7 +297,7 @@ void handle_input(struct connection *conn)
 
 	switch (conn->state) {
 		default:
-			 printf("shouldn't get here %d\n", conn->state);
+			printf("shouldn't get here %d\n", conn->state);
 	}
 }
 
