@@ -223,7 +223,6 @@ int parse_header(struct connection *conn)
 	if(fd != -1) {
 		conn->fd = fd;
 		char header[100] = "HTTP/1.0 200 OK\r\n\r\n";
-		strcpy(conn->send_buffer, header);
 		connection_send_data_custom(conn, header);
 		off_t offset = 0;
 		off_t oth_offset = 0;
