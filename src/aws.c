@@ -33,7 +33,7 @@ static io_context_t ctx;
 
 static int aws_on_path_cb(http_parser *p, const char *buf, size_t len)
 {
-	struct connection *conn = (struct connection *)p->data;
+	struct connection *conn = (struct connection *) p->data;
 
 	memcpy(conn->request_path, buf, len);
 	conn->request_path[len] = '\0';
@@ -45,26 +45,27 @@ static int aws_on_path_cb(http_parser *p, const char *buf, size_t len)
 static void connection_prepare_send_reply_header(struct connection *conn)
 {
 	/* TODO: Prepare the connection buffer to send the reply header. */
+
 }
 
-static void connection_prepare_send_404(struct connection *conn)
-{
-	/* TODO: Prepare the connection buffer to send the 404 header. */
-}
 
 static enum resource_type connection_get_resource_type(struct connection *conn)
 {
 	/* TODO: Get resource type depending on request path/filename. Filename should
 	 * point to the static or dynamic folder.
 	 */
-	return RESOURCE_TYPE_NONE;
+	return conn->res_type;
 }
 
 
 struct connection *connection_create(int sockfd)
 {
 	/* TODO: Initialize connection structure on given socket. */
-	return NULL;
+	struct connection *connection_init = malloc(sizeof(struct connection));
+	connection_init->sockfd = sockfd;
+	memset(connection_init->recv_buffer, 0, BUFSIZ);
+	memset(connection_init->send_buffer, 0, BUFSIZ);
+	return connection_init;
 }
 
 void connection_start_async_io(struct connection *conn)
@@ -72,26 +73,42 @@ void connection_start_async_io(struct connection *conn)
 	/* TODO: Start asynchronous operation (read from file).
 	 * Use io_submit(2) & friends for reading data asynchronously.
 	 */
+	int ret = io_setup(10, &conn->ctx);
+	int error = io_submit(conn->ctx, 10, conn->piocb);
+
+	if(error == -1)
+		perror("aio_read");
+
 }
 
 void connection_remove(struct connection *conn)
 {
 	/* TODO: Remove connection handler. */
+	close(conn->sockfd);
+	conn->state = STATE_CONNECTION_CLOSED;
+	free(conn);
 }
 
 void handle_new_connection(void)
 {
 	/* TODO: Handle a new connection request on the server socket. */
-
+	socklen_t socklen = sizeof(struct sockaddr_in);
+	struct sockaddr_in addr;
 	/* TODO: Accept new connection. */
-
+	int accepting_fd = accept(listenfd, (SSA *) (&addr), &socklen);
 	/* TODO: Set socket to be non-blocking. */
-
+	int flags = fcntl(accepting_fd, F_GETFL, 0);
+	flags = flags | O_NONBLOCK;
+	fcntl(accepting_fd, F_SETFL, flags);
 	/* TODO: Instantiate new connection handler. */
-
+	struct connection *conn = connection_create(accepting_fd);
 	/* TODO: Add socket to epoll. */
-
+	w_epoll_add_ptr_in(epollfd, accepting_fd, conn);
 	/* TODO: Initialize HTTP_REQUEST parser. */
+	http_parser parser;
+	http_parser_init(&parser, HTTP_BOTH);
+	conn->request_parser = parser;
+	conn->request_parser.data = conn;
 }
 
 void receive_data(struct connection *conn)
@@ -99,13 +116,70 @@ void receive_data(struct connection *conn)
 	/* TODO: Receive message on socket.
 	 * Store message in recv_buffer in struct connection.
 	 */
+	int bytes = 0;
+	int old_bytes = 0;
+	char * old_buffer = malloc(BUFSIZ * sizeof(char));
+	old_buffer[0] = 0;
+	int i = 0;
+	do {
+		memcpy(old_buffer, conn->recv_buffer, BUFSIZ * sizeof(char));
+		bytes = recv(conn->sockfd, conn->recv_buffer + old_bytes, BUFSIZ - old_bytes, 0);
+		// printf("RECV_BUFFER: %s\n", conn->recv_buffer);
+		old_bytes += bytes;
+		i ++;
+	} while(strlen(old_buffer) != strlen(conn->recv_buffer));
+	// printf("received buffer\n");
+//	tcp_close_connection(conn->sockfd);
+	free(old_buffer);
+	parse_header(conn);
+//	 printf("rpath: %s\n",conn->request_path);
+
+	conn->recv_len = old_bytes;
 }
+
+int connection_send_data_custom(struct connection *conn, char * custom)
+{
+	/* May be used as a helper function. */
+	/* TODO: Send as much data as possible from the connection send buffer.
+	 * Returns the number of bytes sent or -1 if an error occurred
+	 */
+	// printf("__ sending: %s\n", custom);
+	int old_bytes = 0, bytes = 0;
+	do {
+		bytes = send(conn->sockfd, custom + old_bytes, strlen(custom) - old_bytes, 0);
+		old_bytes += bytes;
+	} while(bytes > 0);
+}
+
+
+static void connection_prepare_send_404(struct connection *conn)
+{
+	/* TODO: Prepare the connection buffer to send the 404 header. */
+	char error[404] = "HTTP/1.0 404 NOT_OK";
+	connection_send_data_custom(conn, error);
+	return;
+}
+
 
 int connection_open_file(struct connection *conn)
 {
 	/* TODO: Open file and update connection fields. */
+	// open file
+	char path[200] = "../tests";
+	strcat(path, conn->request_path);
 
-	return -1;
+	int file_descriptor = open(path, O_RDWR, S_IRUSR | S_IWUSR);
+	if(file_descriptor == -1) {
+		connection_prepare_send_404(conn);
+		return -1;
+	}
+	// printf("file_Desc: %d\n", file_descriptor);
+	struct stat st;
+	fstat(file_descriptor, &st);
+	int size = st.st_size;
+//	printf("size: %d\n", size);
+	conn->file_size = size;
+	return file_descriptor;
 }
 
 void connection_complete_async_io(struct connection *conn)
@@ -115,23 +189,56 @@ void connection_complete_async_io(struct connection *conn)
 	 */
 }
 
+int connection_send_data(struct connection *conn)
+{
+	/* May be used as a helper function. */
+	/* TODO: Send as much data as possible from the connection send buffer.
+	 * Returns the number of bytes sent or -1 if an error occurred
+	 */
+
+	return connection_send_data_custom(conn, conn->send_buffer);
+}
+
 int parse_header(struct connection *conn)
 {
 	/* TODO: Parse the HTTP header and extract the file path. */
 	/* Use mostly null settings except for on_path callback. */
 	http_parser_settings settings_on_path = {
-		.on_message_begin = 0,
-		.on_header_field = 0,
-		.on_header_value = 0,
-		.on_path = aws_on_path_cb,
-		.on_url = 0,
-		.on_fragment = 0,
-		.on_query_string = 0,
-		.on_body = 0,
-		.on_headers_complete = 0,
-		.on_message_complete = 0
+			.on_message_begin = 0,
+			.on_header_field = 0,
+			.on_header_value = 0,
+			.on_path = aws_on_path_cb,
+			.on_url = 0,
+			.on_fragment = 0,
+			.on_query_string = 0,
+			.on_body = 0,
+			.on_headers_complete = 0,
+			.on_message_complete = 0
 	};
+	w_epoll_update_fd_in(epollfd, conn->sockfd);
+
+	int number_of_bytes = http_parser_execute(&(conn->request_parser), &settings_on_path, conn->recv_buffer, BUFSIZ);
+	int fd = connection_open_file(conn);
+	if(fd != -1) {
+		conn->fd = fd;
+		char header[100] = "HTTP/1.0 200 OK\r\n\r\n";
+		strcpy(conn->send_buffer, header);
+		connection_send_data_custom(conn, header);
+		off_t offset = 0;
+		off_t oth_offset = 0;
+		while (offset < conn->file_size) {
+			int err = sendfile(conn->sockfd, conn->fd, &offset, conn->file_size);
+			oth_offset = offset;
+		}
+	}
+
+	close(conn->sockfd);
+	w_epoll_remove_fd(epollfd, conn->sockfd);
 	return 0;
+}
+
+int send_file_dyn(struct connection * conn) {
+
 }
 
 enum connection_state connection_send_static(struct connection *conn)
@@ -140,14 +247,6 @@ enum connection_state connection_send_static(struct connection *conn)
 	return STATE_NO_STATE;
 }
 
-int connection_send_data(struct connection *conn)
-{
-	/* May be used as a helper function. */
-	/* TODO: Send as much data as possible from the connection send buffer.
-	 * Returns the number of bytes sent or -1 if an error occurred
-	 */
-	return -1;
-}
 
 
 int connection_send_dynamic(struct connection *conn)
@@ -166,8 +265,8 @@ void handle_input(struct connection *conn)
 	 */
 
 	switch (conn->state) {
-	default:
-		printf("shouldn't get here %d\n", conn->state);
+		default:
+			 printf("shouldn't get here %d\n", conn->state);
 	}
 }
 
@@ -178,9 +277,10 @@ void handle_output(struct connection *conn)
 	 */
 
 	switch (conn->state) {
-	default:
-		ERR("Unexpected state\n");
-		exit(1);
+
+		default:
+			ERR("Unexpected state\n");
+			exit(1);
 	}
 }
 
@@ -196,26 +296,45 @@ int main(void)
 	int rc;
 
 	/* TODO: Initialize asynchronous operations. */
-
 	/* TODO: Initialize multiplexing. */
 
 	/* TODO: Create server socket. */
+	epollfd = w_epoll_create();
+	listenfd = tcp_create_listener(AWS_LISTEN_PORT, DEFAULT_LISTEN_BACKLOG);
 
 	/* TODO: Add server socket to epoll object*/
+	rc = w_epoll_add_fd_in(epollfd, listenfd);
 
 	/* Uncomment the following line for debugging. */
 	// dlog(LOG_INFO, "Server waiting for connections on port %d\n", AWS_LISTEN_PORT);
 
 	/* server main loop */
+	// printf("executing...\n");
 	while (1) {
 		struct epoll_event rev;
 
 		/* TODO: Wait for events. */
+		rc = w_epoll_wait_infinite(epollfd, &rev);
 
 		/* TODO: Switch event types; consider
 		 *   - new connection requests (on server socket)
 		 *   - socket communication (on connection sockets)
 		 */
+		if (rev.data.fd == listenfd) {
+			// a new connection was made
+			// printf("handling new connection\n");
+			handle_new_connection();
+		} else {
+			// existing connection
+			if (rev.events & EPOLLIN) {
+				// printf("receive new data\n");
+				receive_data(rev.data.ptr);
+			}
+			if (rev.events & EPOLLOUT) {
+				// printf("send new data\n");
+				connection_send_data(rev.data.ptr);
+			}
+		}
 	}
 
 	return 0;
