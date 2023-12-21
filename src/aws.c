@@ -84,9 +84,10 @@ void connection_start_async_io(struct connection *conn)
 void connection_remove(struct connection *conn)
 {
 	/* TODO: Remove connection handler. */
+
 	close(conn->sockfd);
 	conn->state = STATE_CONNECTION_CLOSED;
-	free(conn);
+//	free(conn);
 }
 
 void handle_new_connection(void)
@@ -165,7 +166,7 @@ int connection_open_file(struct connection *conn)
 {
 	/* TODO: Open file and update connection fields. */
 	// open file
-	char path[200] = "../tests";
+	char path[200] = "./";
 	strcat(path, conn->request_path);
 
 	int file_descriptor = open(path, O_RDWR, S_IRUSR | S_IWUSR);
@@ -232,8 +233,8 @@ int parse_header(struct connection *conn)
 		}
 	}
 
-	close(conn->sockfd);
 	w_epoll_remove_fd(epollfd, conn->sockfd);
+	connection_remove(conn);
 	return 0;
 }
 
@@ -299,6 +300,8 @@ int main(void)
 	/* TODO: Initialize multiplexing. */
 
 	/* TODO: Create server socket. */
+
+	printf("hello hehe!\n");
 	epollfd = w_epoll_create();
 	listenfd = tcp_create_listener(AWS_LISTEN_PORT, DEFAULT_LISTEN_BACKLOG);
 
@@ -315,7 +318,7 @@ int main(void)
 
 		/* TODO: Wait for events. */
 		rc = w_epoll_wait_infinite(epollfd, &rev);
-
+//		printf("event: %d\n", rev.events);
 		/* TODO: Switch event types; consider
 		 *   - new connection requests (on server socket)
 		 *   - socket communication (on connection sockets)
@@ -327,15 +330,17 @@ int main(void)
 		} else {
 			// existing connection
 			if (rev.events & EPOLLIN) {
-				// printf("receive new data\n");
+//				 printf("receive new data...\n");
 				receive_data(rev.data.ptr);
+
 			}
 			if (rev.events & EPOLLOUT) {
-				// printf("send new data\n");
+//				 printf("send new data\n");
 				connection_send_data(rev.data.ptr);
 			}
 		}
 	}
+
 
 	return 0;
 }
